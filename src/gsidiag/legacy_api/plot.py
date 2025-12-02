@@ -2558,6 +2558,460 @@ class plot_diag(object):
         return
 
 
+    
+    def statcount_Old(self, varName=None, varType=None, noiqc=False, dateIni=None, dateFin=None, nHour="06", channel=None, figTS=False, figMap=False, area=None, **kwargs):
+
+        '''
+        The StatCount function plots a time series of assimilated, monitored and rejected data. 
+
+        Example:
+
+        varName = 'uv'           # Variable
+        varType = 224            # Source Type
+        noiqc = False            # noiqc GSI namelist parameter (OI QC - True or False)
+        dateIni = 2013010100     # Inicial Date
+        dateFin = 2013010900     # Final Date
+        nHour = "06"             # Time Interval
+        channel = None           # Radiance channel number (None for the conventional dataset)
+        figTS = True             # Creates the time series plot
+        figMap = False           # Creates the spatial plot for each time
+        
+        ! Case conventional dataset: channel = None
+        ! The QC process creates a number indicating the data quality for each observation.
+        ! These numbers are called QC markers in PrepBUFR files and are important as parts of
+        ! the observation information. GSI uses QC markers to decide how to use the data. A 
+        ! brief summary of the meaning of the QC markers is as follows:
+        ! 
+        !    +-----------------+-----------------------------------------------------------+
+        !    | QC markes range | Data Process in GSI                                       |
+        !    +-----------------+-----------------------------------------------------------+
+        !    |  > 15 or        |GSI skips these observations during reading procedure. That|
+        !    |  <= 0           |means these observations are tossed                        | 
+        !    +-----------------+-----------------------------------------------------------+
+        !    |  >= lim_qm      |These observations will be in monitoring status. That means|
+        !    |  and            |these observations will be read in and be processed through|
+        !    |  < = 15         |GSI QC process (gross check) and innovation calculation    | 
+        !    |                 |stage but will not be used in inner iteration.             |
+        !    +-----------------+-----------------------------------------------------------+
+        !    |  > 0            |Observations will be used in further gross check (failure  |
+        !    |  and            |observation will be list in rejection), innovation         |
+        !    |  < lim_qm       |caalculation, and the analysis (inner iteration).          |
+        !    +-----------------+-----------------------------------------------------------+
+        !    +----------------------+---------------+---------------+
+        !    |The value of namelist | lim_qm for Ps | lim_qm others |
+        !    |option noiqc          |               |               |
+        !    +----------------------+---------------+---------------+
+        !    |True (without OI QC)  |       7       |       8       |
+        !    +----------------------+---------------+---------------+
+        !    |False (with OI QC)    |       4       |       4       |
+        !    +----------------------+---------------+---------------+
+        
+        
+        ! Case radiance dataset: channel = number
+        ! There are three types of data classification: assimilated, monitored and rejected.
+        ! Monitored data is organized into two groups: possibly assimilated and possibly rejected.
+        !
+        !    +------------------------+-------------+--------------------+
+        !    |                        |   idqc      |        iuse        |
+        !    +------------------------+-------------+--------------------+
+        !    | Assimilated            |   == 0      |   >= 1             |
+        !    +------------------------+-------------+--------------------+
+        !    |            assimilated |   == 0      |   >= -1 and < 1    |
+        !    | Monitored              |             |                    |
+        !    |            rejected    |   != 0      |   >= -1 and < 1    |
+        !    +------------------------+-------------+--------------------+
+        !    | Rejected               |   != 0      |   >= 1             |
+        !    +------------------------+-------------+--------------------+
+        '''
+        
+        # bibliotecas para criar mapa com cartopy
+        import matplotlib.pyplot as plt
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        import geopandas
+
+
+        if(noiqc):
+            lim_qm = 8
+            if(varName == 'ps'):
+                lim_qm = 7
+        else:
+            lim_qm = 4
+
+        varInfo = getVarInfo(varType, varName, 'instrument')
+        if varInfo is not None:
+            instrument_title = str(varName) + '-' + str(varType) + '  |  ' + varInfo
+        else:
+            instrument_title = str(varName) + '-' + str(varType) + '  |  ' + 'Unknown instrument'
+
+        datei = datetime.strptime(str(dateIni), "%Y%m%d%H")
+        datef = datetime.strptime(str(dateFin), "%Y%m%d%H")
+        date  = datei
+
+        assi, reje, moni, DayHour_tmp = [], [], [], []
+        moniAssi, moniReje = [], []
+        assif, rejef, monif, moniAssif, moniRejef = [], [], [], [], []
+        f = 0
+        while (date <= datef):
+
+            datefmt = date.strftime("%Y%m%d%H")
+            DayHour_tmp.append(date.strftime("%d%H"))
+            
+            # try: For issues reading the file (file not found)
+            # in the except statement an error message is printed and continues for other dates
+            try:
+                
+                if(channel == None):  # Conventional
+                    exp = "(iusev==1)"
+                    assim = self[f].obsInfo[varName].loc[varType].query(exp)
+                    exp = "(iusev==-1) & (iqc >= "+str(lim_qm)+" and iqc <= 15)"
+                    monit = self[f].obsInfo[varName].loc[varType].query(exp)
+                    exp = "(iusev==-1) & ((iqc > 15 or iqc <= 0) or (iqc > 0 and iqc < "+str(lim_qm)+"))"
+                    rejei = self[f].obsInfo[varName].loc[varType].query(exp)
+                
+                    assi.append(len(assim))
+                    moni.append(len(monit))
+                    reje.append(len(rejei))
+                    
+                    print('')
+                    print('assi = ', len(assim), 'moni = ', len(moni), 'reje = ', len(reje))
+                
+                    if (figMap):
+                        df_list = [assim, monit, rejei]
+                        name_list = ["Assimilated ["+str(len(assim))+"]","Monitored ["+str(len(monit))+"]","Rejected ["+str(len(rejei))+"]"]
+                        marker_list = [".","x","*"]     
+                        color_list = ["green","blue","red"]
+                    
+                        setColor = 0 
+                        legend_labels = []
+                    
+                        #fig = plt.figure(figsize=(12, 6))
+                        #ax  = fig.add_subplot(1, 1, 1)
+                        #ax = geoMap(area=None,ax=ax)
+                        
+                        plt.style.use('seaborn-v0_8')
+                        fig = plt.figure(figsize=(12, 6))
+                        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+                        ax.add_feature(cfeature.COASTLINE)
+                        ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor="0.2", zorder=1)
+                        ax.add_feature(cfeature.LAND, facecolor="0.95", edgecolor="0.5", linewidth=0.5, zorder=0)
+                        ax.coastlines(resolution="110m", linewidth=0.6, zorder=2)
+                        
+                        print('')
+                        print('antes area')
+                        
+                        if area is not None:
+                            ax.set_extent(area, ccrs.PlateCarree())
+                        else:
+                            ax.set_global()
+                            
+                        print('')
+                        print('após area')
+                             
+                        gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True, linewidth=0.3, color='gray', alpha=0.5, zorder=3)#, linestyle='--')
+                        print('')
+                        print('após gridlineas')
+                        # versão Read.Radi
+                        gl.ylabels_right = False
+                        gl.xlabels_top = False
+                        # Versão Gerd
+                        gl.top_labels = False
+                        gl.right_labels = False
+                        
+                        ax.text(-0.05, 0.55, 'latitude', va='bottom', ha='center', rotation='vertical', rotation_mode='anchor', 
+                                  transform=ax.transAxes)
+                        ax.text(0.5, -0.08, 'longitude', va='bottom', ha='center', rotation='horizontal', rotation_mode='anchor', 
+                                  transform=ax.transAxes)
+                        print('')
+                        print('após text lat lon')
+                        
+                        for dfi,namedf,mk,cl in zip(df_list,name_list,marker_list,color_list):
+                            df    = dfi
+                            legend_labels.append(mpatches.Patch(color=cl, label=namedf) )
+                            ax = df.plot(ax=ax,legend=True, marker=mk, color=cl, **kwargs)
+                            setColor += 1
+                            plt.legend(handles=legend_labels, numpoints=1, loc='lower center', bbox_to_anchor=(0.5, -0.02), 
+                                    fancybox=True, shadow=False, frameon=False, ncol=3, prop={"size": 10})
+                    
+                        date_title = str(date.strftime("%d%b%Y - %H%M")) + ' GMT'
+                        plt.title(date_title, loc='right', fontsize=10)
+                        plt.title(instrument_title, loc='left', fontsize=9)
+                    
+                        plt.tight_layout()
+                        plt.savefig('TotalObs_'+str(varName) + '-' + str(varType)+'_'+datefmt+'.png', bbox_inches='tight', dpi=100)
+                
+                
+                else:   # Radiance
+                    exp = "(nchan=="+str(channel)+") & (iuse >= 1 & idqc==0.0)"
+                    assim = self[f].obsInfo[varName].loc[varType].query(exp)
+                    exp = "(nchan=="+str(channel)+") & ((iuse >= -1 and iuse < 1) & idqc==0.0)"
+                    monitAssim = self[f].obsInfo[varName].loc[varType].query(exp)
+                    exp = "(nchan=="+str(channel)+") & ((iuse >= -1 and iuse < 1) & idqc!=0.0)"
+                    monitRejei = self[f].obsInfo[varName].loc[varType].query(exp)
+                    exp = "(nchan=="+str(channel)+") & (iuse >= 1 & idqc!=0.0)"
+                    rejei = self[f].obsInfo[varName].loc[varType].query(exp)
+                
+                    assi.append(len(assim))
+                    moniAssi.append(len(monitAssim))
+                    moniReje.append(len(monitRejei))
+                    reje.append(len(rejei))
+                    
+                    forplot = 'Channel ='+str(channel)
+                
+                    # Radiance plots
+                    if (figMap):
+                        # Case: assimilated and rejected
+                        if ((len(assim)) != 0 or (len(rejei)) != 0):
+                            df_list = [assim, rejei]    
+                            name_list = ["Assimilated ["+str(len(assim))+"]","Rejected ["+str(len(rejei))+"]"]
+                            marker_list = ["^","v"]    
+                            color_list = ["green","red"]
+                    
+                            setColor = 0 
+                            legend_labels = []
+                    
+                            #fig = plt.figure(figsize=(12, 6))
+                            #ax  = fig.add_subplot(1, 1, 1)
+                            #ax = geoMap(area=None,ax=ax)
+                            
+                            plt.style.use('seaborn-v0_8')
+                            fig = plt.figure(figsize=(12, 6))
+                            ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+                            ax.add_feature(cfeature.COASTLINE)
+                            ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor="0.2", zorder=1)
+                            ax.add_feature(cfeature.LAND, facecolor="0.95", edgecolor="0.5", linewidth=0.5, zorder=0)
+                            ax.coastlines(resolution="110m", linewidth=0.6, zorder=2)
+
+                            print('')
+                            print('antes area')
+
+                            if area is not None:
+                                ax.set_extent(area, ccrs.PlateCarree())
+                            else:
+                                ax.set_global()
+
+                            print('')
+                            print('após area')
+
+                            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True, linewidth=0.3, color='gray', alpha=0.5, zorder=3)#, linestyle='--')
+                            print('')
+                            print('após gridlineas')
+                            # versão Read.Radi
+                            gl.ylabels_right = False
+                            gl.xlabels_top = False
+                            # Versão Gerd
+                            gl.top_labels = False
+                            gl.right_labels = False
+
+                            ax.text(-0.05, 0.55, 'latitude', va='bottom', ha='center', rotation='vertical', rotation_mode='anchor', 
+                                      transform=ax.transAxes)
+                            ax.text(0.5, -0.08, 'longitude', va='bottom', ha='center', rotation='horizontal', rotation_mode='anchor', 
+                                      transform=ax.transAxes)
+                            print('')
+                            print('após text lat lon')
+                            
+                            
+                            
+                            for dfi,namedf,mk,cl in zip(df_list,name_list,marker_list,color_list):
+                                df    = dfi
+                                legend_labels.append(mpatches.Patch(color=cl, label=namedf) )
+                                ax = df.plot(ax=ax,legend=True, marker=mk, color=cl, **kwargs) 
+                                setColor += 1
+                                plt.legend(handles=legend_labels, numpoints=1, loc='lower center', bbox_to_anchor=(0.5, -0.02), 
+                                        fancybox=True, shadow=False, frameon=False, ncol=2, prop={"size": 10})
+                        
+                            date_title = str(date.strftime("%d%b%Y - %H%M")) + ' GMT'
+                            plt.title(date_title, loc='right', fontsize=10)
+                            plt.title(instrument_title, loc='left', fontsize=9)
+                            plt.annotate(forplot, xy=(0.45, 1.015), xytext=(0, 0), xycoords='axes fraction', textcoords='offset points', 
+                                         color='gray', fontweight='bold', fontsize='10', horizontalalignment='left', 
+                                         verticalalignment='center')
+                    
+                            plt.tight_layout()
+                            plt.savefig('Assim-Rejei_'+str(varName) + '-' + str(varType)+'_'+ 'CH' + str(channel) + '_' +datefmt+'.png', 
+                                        bbox_inches='tight', dpi=100)
+                        else:
+                            print("channel ",channel," not assimilated or rejected on the date -->",date.strftime("%Y-%m-%d:%H"))
+                    
+                        # Monitored cases: would be assimilated or rejected 
+                        if ((len(monitAssim)) != 0 or (len(monitRejei)) != 0):
+                            df_list = [monitAssim, monitRejei]
+                            name_list = ["Monitored-Assimilated ["+str(len(monitAssim))+"]","Monitored-Rejected ["+str(len(monitRejei))+"]"]
+                            marker_list = ["^","v"]   
+                            color_list = ["teal","purple"]
+                    
+                            setColor = 0 
+                            legend_labels = []
+                    
+                            #fig = plt.figure(figsize=(12, 6))
+                            #ax  = fig.add_subplot(1, 1, 1)
+                            #ax = geoMap(area=None,ax=ax)
+                            
+                            
+                            plt.style.use('seaborn-v0_8')
+                            fig = plt.figure(figsize=(12, 6))
+                            ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+                            ax.add_feature(cfeature.COASTLINE)
+                            ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor="0.2", zorder=1)
+                            ax.add_feature(cfeature.LAND, facecolor="0.95", edgecolor="0.5", linewidth=0.5, zorder=0)
+                            ax.coastlines(resolution="110m", linewidth=0.6, zorder=2)
+
+                            print('')
+                            print('antes area')
+
+                            if area is not None:
+                                ax.set_extent(area, ccrs.PlateCarree())
+                            else:
+                                ax.set_global()
+
+                            print('')
+                            print('após area')
+
+                            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True, linewidth=0.3, color='gray', alpha=0.5, zorder=3)#, linestyle='--')
+                            print('')
+                            print('após gridlineas')
+                            # versão Read.Radi
+                            gl.ylabels_right = False
+                            gl.xlabels_top = False
+                            # Versão Gerd
+                            gl.top_labels = False
+                            gl.right_labels = False
+
+                            ax.text(-0.05, 0.55, 'latitude', va='bottom', ha='center', rotation='vertical', rotation_mode='anchor', 
+                                      transform=ax.transAxes)
+                            ax.text(0.5, -0.08, 'longitude', va='bottom', ha='center', rotation='horizontal', rotation_mode='anchor', 
+                                      transform=ax.transAxes)
+                            print('')
+                            print('após text lat lon')
+                            
+                            
+                            for dfi,namedf,mk,cl in zip(df_list,name_list,marker_list,color_list):
+                                df    = dfi
+                                legend_labels.append(mpatches.Patch(color=cl, label=namedf) )
+                                ax = df.plot(ax=ax,legend=True, marker=mk, color=cl, **kwargs) 
+                                setColor += 1
+                                plt.legend(handles=legend_labels, numpoints=1, loc='lower center', bbox_to_anchor=(0.5, -0.02), 
+                                        fancybox=True, shadow=False, frameon=False, ncol=2, prop={"size": 10})
+                        
+                            date_title = str(date.strftime("%d%b%Y - %H%M")) + ' GMT'
+                            plt.title(date_title, loc='right', fontsize=10)
+                            plt.title(instrument_title, loc='left', fontsize=9)
+                            plt.annotate(forplot, xy=(0.45, 1.015), xytext=(0, 0), xycoords='axes fraction', textcoords='offset points', 
+                                         color='gray', fontweight='bold', fontsize='10', horizontalalignment='left', 
+                                         verticalalignment='center')
+                    
+                            plt.tight_layout()
+                            plt.savefig('Monitored_'+str(varName) + '-' + str(varType)+'_'+ 'CH' + str(channel) + '_'+datefmt+'.png', 
+                                        bbox_inches='tight', dpi=100)
+                        else:
+                            print("channel ",channel," not monitored on the date -->",date.strftime("%Y-%m-%d:%H"))
+                    
+            except:
+                print("++++++++++++++++++++++++++ ERROR: file reading --> STATCOUNT ++++++++++++++++++++++++++")
+                print(setcolor.WARNING + "    >>> No information on this date (" + str(date.strftime("%Y-%m-%d:%H")) +") <<< " + setcolor.ENDC)
+                if(channel == None):
+                    assi.append(None)
+                    moni.append(None)
+                    reje.append(None)
+                else:
+                    assi.append(None)
+                    moniAssi.append(None)
+                    moniReje.append(None)
+                    reje.append(None)
+                    
+            f = f + 1
+            date = date + timedelta(hours=int(nHour))
+            date_finale = date
+            
+
+
+        if (figTS):
+            if(channel == None):   # Conventional
+                if(len(DayHour_tmp) > 4):
+                    DayHour = [hr if (ix % int(len(DayHour_tmp) / 4)) == 0 else '' for ix, hr in enumerate(DayHour_tmp)]
+                else:
+                    DayHour = DayHour_tmp
+                
+                x_axis      = np.arange(0, len(DayHour), 1)
+                date_title = str(datei.strftime("%d%b")) + '-' + str(date_finale.strftime("%d%b")) + ' ' + str(date_finale.strftime("%Y"))
+            
+                fig = plt.figure(figsize=(6, 4))
+                fig, ax1 = plt.subplots(1, 1)
+                plt.style.use('seaborn-v0_8-ticks')
+
+                plt.axhline(y=0.0,ls='solid',c='#d3d3d3')
+
+                ax1.plot(x_axis, assi, "o", label="Assimilated \n["+str(sum(assi))+"]", color='green')
+                ax1.plot(x_axis, moni, "o", label="Monitored \n["+str(sum(moni))+"]", color='blue')
+                ax1.plot(x_axis, reje, "o", label="Rejected \n["+str(sum(reje))+"]", color='red')
+                ax1.legend(fancybox=True, frameon=True, shadow=True, loc="upper center",ncol=3)
+                ax1.set_xlabel('Date (DayHour)', fontsize=10)
+                plt.title(date_title, loc='right', fontsize=10)
+                plt.title(instrument_title, loc='left', fontsize=9)
+                
+                ax1.set_ylim(np.round(-0.05*np.max([assi,moni,reje])), np.round(1.25*np.max([assi,moni,reje])))
+                ax1.set_ylabel('Total Observations', color='black', fontsize=10)
+                ax1.tick_params('y', colors='black')
+                plt.xticks(x_axis, DayHour)
+                major_ticks = [ DayHour.index(dh) for dh in filter(None,DayHour) ]
+                ax1.set_xticks(major_ticks)
+                plt.axhline(y=np.mean(assi),ls='dotted',c='lightgray')
+                plt.axhline(y=np.mean(moni),ls='dotted',c='lightgray')
+                plt.axhline(y=np.mean(reje),ls='dotted',c='lightgray')
+                plt.tight_layout()
+                plt.savefig('time_series_'+str(varName) + '-' + str(varType)+'_TotalObs.png', bbox_inches='tight', dpi=100)
+                
+            else:   # Radiance
+                if(len(DayHour_tmp) > 4):
+                    DayHour = [hr if (ix % int(len(DayHour_tmp) / 4)) == 0 else '' for ix, hr in enumerate(DayHour_tmp)]
+                else:
+                    DayHour = DayHour_tmp
+                
+                x_axis      = np.arange(0, len(DayHour), 1)
+                date_title = str(datei.strftime("%d%b")) + '-' + str(date_finale.strftime("%d%b")) + ' ' + str(date_finale.strftime("%Y"))
+            
+                fig = plt.figure(figsize=(6, 4))
+                fig, ax1 = plt.subplots(1, 1)
+                plt.style.use('seaborn-v0_8-ticks')
+
+                plt.axhline(y=0.0,ls='solid',c='#d3d3d3')
+                
+                # List with value None: is removed to calculate sum, max and min
+                # The lists below are only used to define the scale of the axes and the total sum of assi/rejei/monit data
+                assif     = [x for x in assi if x != None]
+                moniAssif = [x for x in moniAssi if x != None]
+                moniRejef = [x for x in moniReje if x != None]
+                rejef     = [x for x in reje if x != None]
+
+                ax1.plot(x_axis, assi, "o", label="Assimilated \n["+str(sum(assif))+"]", color='green')
+                ax1.plot(x_axis, moniAssi, "o", label="Monitored-Assim \n["+str(sum(moniAssif))+"]", color='teal')
+                ax1.plot(x_axis, moniReje, "o", label="Monitored-Rejei \n["+str(sum(moniRejef))+"]", color='purple')
+                ax1.plot(x_axis, reje, "o", label="Rejected \n["+str(sum(rejef))+"]", color='red')
+                ax1.legend(fancybox=True, frameon=True, shadow=True, loc="best",ncol=1)
+                ax1.set_xlabel('Date (DayHour)', fontsize=10)
+                plt.title(date_title, loc='right', fontsize=10)
+                plt.title(instrument_title, loc='left', fontsize=9)
+                plt.annotate(forplot, xy=(0.0, 0.965), xytext=(0, 0), xycoords='axes fraction', textcoords='offset points', 
+                             color='lightgray', fontweight='bold', fontsize='12', horizontalalignment='left', verticalalignment='center')
+                
+                ax1.set_ylim(np.round(-0.05*np.max([assif,moniAssif,moniRejef,rejef])),
+                             np.round(1.25*np.max([assif,moniAssif,moniRejef,rejef])))
+                ax1.set_ylabel('Total Observations', color='black', fontsize=10)
+                ax1.tick_params('y', colors='black')
+                plt.xticks(x_axis, DayHour)
+                major_ticks = [ DayHour.index(dh) for dh in filter(None,DayHour) ]
+                ax1.set_xticks(major_ticks)
+                plt.axhline(y=np.mean(assif),ls='dotted',c='lightgray')
+                plt.axhline(y=np.mean(moniAssif),ls='dotted',c='lightgray')
+                plt.axhline(y=np.mean(moniRejef),ls='dotted',c='lightgray')
+                plt.axhline(y=np.mean(rejef),ls='dotted',c='lightgray')
+                plt.tight_layout()
+                plt.savefig('time_series_'+str(varName) + '-' + str(varType) +'_'+ 'CH' + str(channel) + '_'+'_TotalObs.png',
+                            bbox_inches='tight', dpi=100)
+
+
+                
+    
 #EOC
 #-----------------------------------------------------------------------------#
 
