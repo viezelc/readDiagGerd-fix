@@ -9,6 +9,7 @@ dataout/
 outputs/
 dataTest/
 data_processed/
+data
 
 # -----------------------------------------------------
 # Documentation (legacy and build artifacts)
